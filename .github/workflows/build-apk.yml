@@ -1,31 +1,84 @@
-name: Build Azizi File Manager
+name: Import and Build Azizi File Manager
 
 on:
   push:
     branches: [ main ]
   workflow_dispatch:
 
+permissions:
+  contents: write
+
 jobs:
-  build:
-    runs-on: ubuntu-latest
+  import-and-build:
+    runs-on: ubuntu-22.04
     steps:
-      - name: Checkout
+      - name: Checkout repository
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - name: Import Amaze File Manager release/4.0
+        run: |
+          if [ ! -f .azizi-amaze-imported ]; then
+            git clone --depth 1 --branch release/4.0 https://github.com/TeamAmaze/AmazeFileManager.git /tmp/amaze
+            find . -mindepth 1 -maxdepth 1 ! -name .git ! -name .github -exec rm -rf {} +
+            rsync -a --exclude='.git' --exclude='.github' /tmp/amaze/ ./
+            printf '%s\n' 'TeamAmaze/AmazeFileManager release/4.0 imported by Azizi File Manager.' > .azizi-amaze-imported
+            git config user.name 'github-actions[bot]'
+            git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+            git add -A
+            git commit -m 'Import Amaze File Manager base [skip ci]'
+            git push origin HEAD:main
+          else
+            echo 'Amaze base already imported.'
+          fi
+
       - name: Set up JDK 17
         uses: actions/setup-java@v4
         with:
           distribution: temurin
           java-version: '17'
+
       - name: Set up Android SDK
         uses: android-actions/setup-android@v3
-      - name: Install Android platform and build tools
-        run: sdkmanager "platforms;android-35" "build-tools;35.0.0"
-      - name: Generate Gradle wrapper
-        run: gradle wrapper --gradle-version 8.10.2
-      - name: Build debug APK
-        run: ./gradlew assembleDebug --stacktrace
-      - name: Upload APK
+
+      - name: Set up NDK r28c
+        uses: nttld/setup-ndk@v1
+        with:
+          ndk-version: r28c
+          link-to-sdk: true
+          local-cache: true
+
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Rust dependencies
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/bin/
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+            file_operations/target/
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-
+
+      - name: Prepare Rust Android targets
+        run: |
+          cd file_operations
+          chmod +x setup_rust_android.sh
+          ./setup_rust_android.sh
+
+      - name: Build F-Droid debug APK
+        run: |
+          chmod +x gradlew
+          ./gradlew assembleFdroidDebug --stacktrace
+
+      - name: Upload installable APK
         uses: actions/upload-artifact@v4
         with:
-          name: Azizi-File-Manager-debug
-          path: app/build/outputs/apk/debug/app-debug.apk
+          name: Azizi-File-Manager-Fdroid-debug
+          path: app/build/outputs/apk/fdroid/debug/app-fdroid-debug.apk
+          if-no-files-found: error
